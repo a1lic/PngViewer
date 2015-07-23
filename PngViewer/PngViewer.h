@@ -47,6 +47,7 @@ private:
 	void on_close();
 	//void on_command(WORD, WORD, HWND);
 	void on_system_command(WORD);
+	void on_right_button_up(WORD, WORD, WORD);
 	void on_enter_menu_loop();
 	void on_enter_size_move();
 	void on_exit_size_move();

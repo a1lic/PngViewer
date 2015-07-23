@@ -273,6 +273,20 @@ void PngViewer::on_system_command(WORD id)
 	}
 }
 
+void PngViewer::on_right_button_up(WORD modifier, WORD client_x, WORD client_y)
+{
+	POINT p;
+	int id;
+
+	::SendMessage(this->window, WM_ENTERMENULOOP, 0, 0);
+	::GetCursorPos(&p);
+	id = (int)::TrackPopupMenu(this->menu, TPM_RIGHTBUTTON | TPM_NONOTIFY | TPM_RETURNCMD, p.x, p.y, 0, this->window, nullptr);
+	if(id > 0)
+	{
+		::PostMessage(this->window, WM_SYSCOMMAND, MAKEWPARAM(id, 0), 0);
+	}
+}
+
 void PngViewer::on_enter_menu_loop()
 {
 	MENUITEMINFO item;
@@ -720,6 +734,11 @@ LRESULT CALLBACK PngViewer::window_proc(HWND hWnd, UINT Msg, WPARAM wParam, LPAR
 		{
 			r = ::DefWindowProc(hWnd, Msg, wParam, lParam);
 		}
+		break;
+
+	case WM_RBUTTONUP:
+		r = 0;
+		_this->on_right_button_up(LOWORD(wParam), LOWORD(lParam), HIWORD(lParam));
 		break;
 
 	case WM_ENTERMENULOOP:
