@@ -16,9 +16,13 @@ extern "C" int APIENTRY _tWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, 
 {
 	PngViewer * viewer;
 
+	::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+
 	viewer = new PngViewer(hInstance);
 	viewer->Show();
 	delete viewer;
+
+	::CoUninitialize();
 
 	return 0;
 }
@@ -48,13 +52,20 @@ PngViewer::PngViewer(HINSTANCE instance)
 		class_atom = ::RegisterClassEx(&wc);
 	}
 
+	this->method = PNG_LOAD_METHOD_WIC;
 	this->png_buffer = nullptr;
+	this->png_file_handle = INVALID_HANDLE_VALUE;
 	this->instance = instance;
 }
 
 PngViewer::~PngViewer()
 {
 	short prev_count;
+
+	if(this->png_file_handle != INVALID_HANDLE_VALUE)
+	{
+		::CloseHandle(this->png_file_handle);
+	}
 
 	if(this->png_buffer)
 	{
@@ -96,6 +107,19 @@ bool PngViewer::on_create()
 	MENUITEMINFO item;
 	HMENU window_menu;
 
+	this->device_gi = nullptr;
+	this->gi_factory = nullptr;
+	this->swap_chain = nullptr;
+	this->comp_device = nullptr;
+	this->comp_target = nullptr;
+	this->comp_visual = nullptr;
+
+	this->wic_factory = nullptr;
+	if(::CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, __uuidof(IWICImagingFactory), (LPVOID *)&this->wic_factory) != S_OK)
+	{
+		return false;
+	}
+
 	if(!this->init_d2d())
 	{
 		return false;
@@ -123,11 +147,22 @@ bool PngViewer::on_create()
 	item.fMask = MIIM_FTYPE;
 	item.fType = MFT_SEPARATOR;
 	::InsertMenuItem(this->menu, -1, MF_BYPOSITION, &item);
-	item.fMask = MIIM_ID | MIIM_STRING;
+	item.fMask = MIIM_ID | MIIM_STRING | MIIM_FTYPE;
+	item.fType = MFT_RADIOCHECK;
 	item.wID = 2;
-	item.dwTypeData = TEXT("バージョン情報(&A)…");
+	item.dwTypeData = TEXT("libpngを使用して読み込む(&L)");
 	::InsertMenuItem(this->menu, -1, MF_BYPOSITION, &item);
 	item.wID = 3;
+	item.dwTypeData = TEXT("WICを使用して読み込む(&W)");
+	::InsertMenuItem(this->menu, -1, MF_BYPOSITION, &item);
+	item.fMask = MIIM_FTYPE;
+	item.fType = MFT_SEPARATOR;
+	::InsertMenuItem(this->menu, -1, MF_BYPOSITION, &item);
+	item.fMask = MIIM_ID | MIIM_STRING;
+	item.wID = 4;
+	item.dwTypeData = TEXT("バージョン情報(&A)…");
+	::InsertMenuItem(this->menu, -1, MF_BYPOSITION, &item);
+	item.wID = 5;
 	item.dwTypeData = TEXT("終了(&X)\tAlt+F4");
 	::InsertMenuItem(this->menu, -1, MF_BYPOSITION, &item);
 
@@ -159,6 +194,10 @@ void PngViewer::on_destroy()
 	if(this->device_gi)
 	{
 		this->device_gi->Release();
+	}
+	if(this->wic_factory)
+	{
+		this->wic_factory->Release();
 	}
 
 	::SetMenu(this->window, nullptr);
@@ -193,20 +232,58 @@ void PngViewer::on_system_command(WORD id)
 			if(this->png_buffer)
 			{
 				delete[] this->png_buffer;
+				this->png_buffer = nullptr;
 			}
-			this->png_buffer = ::LoadPng(fn, &this->png_length, &this->png_width, &this->png_height, &this->png_line_length);
-			if(this->png_buffer)
+			if(this->png_file_handle != INVALID_HANDLE_VALUE)
 			{
-				this->load_png_to_buffer();
+				::CloseHandle(this->png_file_handle);
+				this->png_file_handle = INVALID_HANDLE_VALUE;
+			}
+			switch(this->method)
+			{
+			case PNG_LOAD_METHOD_LIBPNG:
+				this->png_buffer = ::LoadPng(fn, &this->png_length, &this->png_width, &this->png_height, &this->png_line_length);
+				if(this->png_buffer)
+				{
+					this->load_png_to_buffer();
+				}
+				break;
+			case PNG_LOAD_METHOD_WIC:
+				this->png_file_handle = ::CreateFile(fn, FILE_READ_DATA, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+				if(this->png_file_handle != INVALID_HANDLE_VALUE)
+				{
+					this->load_png_with_wic();
+					::SetFilePointer(this->png_file_handle, 0, 0, FILE_BEGIN);
+				}
+				break;
 			}
 		}
 		break;
 	case 2:
+		this->method = PNG_LOAD_METHOD_LIBPNG;
 		break;
 	case 3:
+		this->method = PNG_LOAD_METHOD_WIC;
+		break;
+	case 4:
+		break;
+	case 5:
 		::PostMessage(this->window, WM_CLOSE, 0, 0);
 		break;
 	}
+}
+
+void PngViewer::on_enter_menu_loop()
+{
+	MENUITEMINFO item;
+
+	item.cbSize = sizeof(MENUITEMINFO);
+
+	item.fMask = MIIM_STATE;
+	item.fState = (this->method == PNG_LOAD_METHOD_LIBPNG) ? MFS_CHECKED : MFS_UNCHECKED;
+	::SetMenuItemInfo(this->menu, 2, MF_BYCOMMAND, &item);
+	item.fState = (this->method == PNG_LOAD_METHOD_WIC) ? MFS_CHECKED : MFS_UNCHECKED;
+	::SetMenuItemInfo(this->menu, 3, MF_BYCOMMAND, &item);
 }
 
 void PngViewer::on_enter_size_move()
@@ -238,6 +315,10 @@ void PngViewer::on_exit_size_move()
 		{
 			this->load_png_to_buffer();
 		}
+		else if(this->png_file_handle != INVALID_HANDLE_VALUE)
+		{
+			this->load_png_with_wic();
+		}
 		else
 		{
 			this->draw_screen();
@@ -254,13 +335,6 @@ bool PngViewer::init_d2d()
 	ID3D11Device * device;
 	IDXGISwapChain1 * swap_chain_1;
 	HRESULT r;
-
-	this->device_gi = nullptr;
-	this->gi_factory = nullptr;
-	this->swap_chain = nullptr;
-	this->comp_device = nullptr;
-	this->comp_target = nullptr;
-	this->comp_visual = nullptr;
 
 	if(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr, nullptr) != S_OK)
 	{
@@ -390,8 +464,8 @@ void PngViewer::draw_screen()
 
 	brush_color = D2D1::ColorF(0.18f, 0.55f, 0.34f, 0.75f);
 	context->CreateSolidColorBrush(brush_color, &brush);
-	ellipseCenter = D2D1::Point2F(this->swap_chain_region.cx / 2, this->swap_chain_region.cy / 2);
-	ellipse = D2D1::Ellipse(ellipseCenter, this->swap_chain_region.cx / 2, this->swap_chain_region.cy / 2);
+	ellipseCenter = D2D1::Point2F(this->swap_chain_region.cx / 2.0F, this->swap_chain_region.cy / 2.0F);
+	ellipse = D2D1::Ellipse(ellipseCenter, this->swap_chain_region.cx / 2.0F, this->swap_chain_region.cy / 2.0F);
 	context->FillEllipse(ellipse, brush);
 
 	context->EndDraw();
@@ -416,7 +490,6 @@ void PngViewer::load_png_to_buffer()
 	ID2D1DeviceContext1 * context;
 	IDXGISurface2 * surface;
 	ID2D1Bitmap1 * bitmap;
-	ID2D1Bitmap1 * texture;
 
 	if(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, options, &d2_factory) != S_OK)
 	{
@@ -492,6 +565,112 @@ void PngViewer::load_png_to_buffer()
 	d2_factory->Release();
 }
 
+void PngViewer::load_png_with_wic()
+{
+	static const D2D1_FACTORY_OPTIONS options = { D2D1_DEBUG_LEVEL_INFORMATION };
+	D2D1_BITMAP_PROPERTIES1 bmp_properties;
+	ID2D1Factory2 * d2_factory;
+	ID2D1Device1 * d2_device;
+	ID2D1DeviceContext1 * context;
+	IDXGISurface2 * surface;
+	IWICBitmapDecoder * decoder;
+	IWICBitmapFrameDecode * frame_decoder;
+	IWICFormatConverter * format_converter;
+	ID2D1Bitmap1 * png_texture;
+	ID2D1Bitmap1 * bitmap;
+
+	if(this->wic_factory->CreateDecoderFromFileHandle(reinterpret_cast<ULONG_PTR>(this->png_file_handle), nullptr, WICDecodeMetadataCacheOnLoad, &decoder) != S_OK)
+	{
+		return;
+	}
+
+	if(decoder->GetFrame(0, &frame_decoder) != S_OK)
+	{
+		decoder->Release();
+		return;
+	}
+
+	if(this->wic_factory->CreateFormatConverter(&format_converter) != S_OK)
+	{
+		frame_decoder->Release();
+		decoder->Release();
+		return;
+	}
+
+	format_converter->Initialize(frame_decoder, GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeMedianCut);
+
+	frame_decoder->Release();
+	decoder->Release();
+
+	if(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, options, &d2_factory) != S_OK)
+	{
+		format_converter->Release();
+		return;
+	}
+
+	if(d2_factory->CreateDevice(this->device_gi, &d2_device) != S_OK)
+	{
+		format_converter->Release();
+		d2_factory->Release();
+		return;
+	}
+
+	if(d2_device->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &context) != S_OK)
+	{
+		format_converter->Release();
+		d2_device->Release();
+		d2_factory->Release();
+		return;
+	}
+
+	if(this->swap_chain->GetBuffer(0, __uuidof(IDXGISurface2), (void **)&surface) != S_OK)
+	{
+		format_converter->Release();
+		context->Release();
+		d2_device->Release();
+		d2_factory->Release();
+		return;
+	}
+
+	::memset(&bmp_properties, 0, sizeof(D2D1_BITMAP_PROPERTIES1));
+	bmp_properties.pixelFormat.alphaMode = D2D1_ALPHA_MODE_PREMULTIPLIED;
+	bmp_properties.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
+	bmp_properties.bitmapOptions = D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW;
+	if(context->CreateBitmapFromDxgiSurface(surface, &bmp_properties, &bitmap) != S_OK)
+	{
+		format_converter->Release();
+		surface->Release();
+		context->Release();
+		d2_device->Release();
+		d2_factory->Release();
+		return;
+	}
+
+	bmp_properties.bitmapOptions = D2D1_BITMAP_OPTIONS_TARGET;
+	if(context->CreateBitmapFromWicBitmap(format_converter, &bmp_properties, &png_texture) != S_OK)
+	{
+		format_converter->Release();
+		bitmap->Release();
+		surface->Release();
+		context->Release();
+		d2_device->Release();
+		d2_factory->Release();
+		return;
+	}
+
+	context->SetTarget(bitmap);
+	bitmap->CopyFromBitmap(nullptr, png_texture, nullptr);
+	this->swap_chain->Present(1, 0);
+
+	format_converter->Release();
+	png_texture->Release();
+	bitmap->Release();
+	surface->Release();
+	context->Release();
+	d2_device->Release();
+	d2_factory->Release();
+}
+
 LRESULT CALLBACK PngViewer::window_proc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
 {
 	PngViewer * _this;
@@ -541,6 +720,11 @@ LRESULT CALLBACK PngViewer::window_proc(HWND hWnd, UINT Msg, WPARAM wParam, LPAR
 		{
 			r = ::DefWindowProc(hWnd, Msg, wParam, lParam);
 		}
+		break;
+
+	case WM_ENTERMENULOOP:
+		r = 0;
+		_this->on_enter_menu_loop();
 		break;
 
 	case WM_ENTERSIZEMOVE:

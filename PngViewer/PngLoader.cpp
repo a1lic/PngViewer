@@ -33,7 +33,7 @@ extern "C" bool SetupPngHandling(const TCHAR * File, HANDLE * PngFile, png_struc
 	if(!_PngInfo)
 	{
 		::png_destroy_read_struct(&_Png, (png_infopp)nullptr, (png_infopp)nullptr);
-		::CloseHandle(PngFile);
+		::CloseHandle(_PngFile);
 		return false;
 	}
 
@@ -48,6 +48,7 @@ extern "C" bool SetupPngHandling(const TCHAR * File, HANDLE * PngFile, png_struc
 
 	::png_set_read_fn(_Png, _PngFile, OnPngRead);
 
+	*PngFile = _PngFile;
 	*Png = _Png;
 	*PngInfo = _PngInfo;
 	return true;
@@ -73,7 +74,8 @@ extern "C" unsigned char * LoadPng(const TCHAR * File, size_t * RawLength, unsig
 		return nullptr;
 	}
 
-	::png_read_png(Png, PngInfo, PNG_TRANSFORM_BGR | PNG_TRANSFORM_STRIP_16 | PNG_TRANSFORM_PACKING | PNG_TRANSFORM_EXPAND, nullptr);
+	::png_read_png(Png, PngInfo, PNG_TRANSFORM_BGR, nullptr);
+
 	Image = ::png_get_rows(Png, PngInfo);
 	if(!Image)
 	{
