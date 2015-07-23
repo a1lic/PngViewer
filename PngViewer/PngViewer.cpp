@@ -9,7 +9,7 @@
 #include <d2d1_2helper.h>
 #include <dcomp.h>
 
-extern "C" bool SelectOpenFile(TCHAR *, unsigned int);
+extern "C" bool SelectOpenFile(HWND, TCHAR *, unsigned int);
 extern "C" unsigned char * LoadPng(const TCHAR *, size_t *, unsigned int *, unsigned int *, unsigned int *);
 
 extern "C" int APIENTRY _tWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPTSTR lpCmdLine, int nCmdShow)
@@ -227,7 +227,7 @@ void PngViewer::on_system_command(WORD id)
 	switch(id)
 	{
 	case 1:
-		if(::SelectOpenFile(fn, MAX_PATH))
+		if(::SelectOpenFile(this->window, fn, MAX_PATH))
 		{
 			if(this->png_buffer)
 			{

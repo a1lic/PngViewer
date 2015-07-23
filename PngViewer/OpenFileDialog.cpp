@@ -10,7 +10,7 @@ extern "C" UINT_PTR CALLBACK Nothing(HWND hdlg, UINT uiMsg, WPARAM wParam, LPARA
 	return 0;
 }
 
-extern "C" bool SelectOpenFileClassic(TCHAR * File, unsigned int Size)
+extern "C" bool SelectOpenFileClassic(HWND Parent, TCHAR * File, unsigned int Size)
 {
 	OPENFILENAME _o;
 	TCHAR * _f;
@@ -18,6 +18,7 @@ extern "C" bool SelectOpenFileClassic(TCHAR * File, unsigned int Size)
 	_f = new TCHAR[MAX_PATH];
 	::memset(_f, 0, sizeof(TCHAR) * MAX_PATH);
 	_o = GetOpenFileTemplate;
+	_o.hwndOwner = Parent;
 	_o.lpstrFile = _f;
 	if(::GetAsyncKeyState(VK_SHIFT) & 0x8000)
 	{
@@ -36,7 +37,7 @@ extern "C" bool SelectOpenFileClassic(TCHAR * File, unsigned int Size)
 	return false;
 }
 
-extern "C" bool SelectOpenFile(TCHAR * File, unsigned int Size)
+extern "C" bool SelectOpenFile(HWND Parent, TCHAR * File, unsigned int Size)
 {
 	HRESULT _r;
 	IFileOpenDialog * _o;
@@ -46,14 +47,14 @@ extern "C" bool SelectOpenFile(TCHAR * File, unsigned int Size)
 
 	if(::GetAsyncKeyState(VK_SHIFT) & 0x8000)
 	{
-		return ::SelectOpenFileClassic(File, Size);
+		return ::SelectOpenFileClassic(Parent, File, Size);
 	}
 	else
 	{
 		_r = ::CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&_o));
 		if(FAILED(_r))
 		{
-			return ::SelectOpenFileClassic(File, Size);
+			return ::SelectOpenFileClassic(Parent, File, Size);
 		}
 	}
 
@@ -62,7 +63,7 @@ extern "C" bool SelectOpenFile(TCHAR * File, unsigned int Size)
 	_o->SetOptions(_opt | FOS_NOCHANGEDIR | FOS_NOTESTFILECREATE | FOS_HIDEMRUPLACES | FOS_DONTADDTORECENT);
 	_o->SetFileTypes(1, &FilterSpec);
 
-	_r = _o->Show(nullptr);
+	_r = _o->Show(Parent);
 	if(SUCCEEDED(_r))
 	{
 		_r = _o->GetResult(&_s);
